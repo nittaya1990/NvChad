@@ -123,8 +123,6 @@ M.theme_switcher = function(opts)
                         vim.g.current_nvchad_theme = final_theme
                     end
                 end
-                -- open a buffer and close it to reload the statusline
-                vim.cmd("new|bwipeout")
             else
                 final_theme = current_theme
             end

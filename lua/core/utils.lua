@@ -1,333 +1,192 @@
 local M = {}
+local merge_tb = vim.tbl_deep_extend
 
-M.close_buffer = function(bufexpr, force)
-   -- This is a modification of a NeoVim plugin from
-   -- Author: ojroques - Olivier Roques
-   -- Src: https://github.com/ojroques/nvim-bufdel
-   -- (Author has okayed copy-paste)
+M.load_config = function()
+  local config = require "core.default_config"
+  local chadrc_exists, chadrc = pcall(require, "custom.chadrc")
 
-   -- Options
-   local opts = {
-      next = "cycle", -- how to retrieve the next buffer
-      quit = false, -- exit when last buffer is deleted
-      --TODO make this a chadrc flag/option
-   }
+  if chadrc_exists then
+    -- merge user config if it exists and is a table; otherwise display an error
+    if type(chadrc) == "table" then
+      config.mappings = M.remove_disabled_keys(chadrc.mappings, config.mappings)
+      config = merge_tb("force", config, chadrc) or {}
+    else
+      error "chadrc must return a table!"
+    end
+  end
 
-   -- ----------------
-   -- Helper functions
-   -- ----------------
+  config.mappings.disabled = nil
+  return config
+end
 
-   -- Switch to buffer 'buf' on each window from list 'windows'
-   local function switch_buffer(windows, buf)
-      local cur_win = vim.fn.winnr()
-      for _, winid in ipairs(windows) do
-         vim.cmd(string.format("%d wincmd w", vim.fn.win_id2win(winid)))
-         vim.cmd(string.format("buffer %d", buf))
+M.remove_disabled_keys = function(chadrc_mappings, default_mappings)
+  if not chadrc_mappings then
+    return default_mappings
+  end
+
+  -- store keys in a array with true value to compare
+  local keys_to_disable = {}
+  for _, mappings in pairs(chadrc_mappings) do
+    for mode, section_keys in pairs(mappings) do
+      if not keys_to_disable[mode] then
+        keys_to_disable[mode] = {}
       end
-      vim.cmd(string.format("%d wincmd w", cur_win)) -- return to original window
-   end
-
-   -- Select the first buffer with a number greater than given buffer
-   local function get_next_buf(buf)
-      local next = vim.fn.bufnr "#"
-      if opts.next == "alternate" and vim.fn.buflisted(next) == 1 then
-         return next
+      section_keys = (type(section_keys) == "table" and section_keys) or {}
+      for k, _ in pairs(section_keys) do
+        keys_to_disable[mode][k] = true
       end
-      for i = 0, vim.fn.bufnr "$" - 1 do
-         next = (buf + i) % vim.fn.bufnr "$" + 1 -- will loop back to 1
-         if vim.fn.buflisted(next) == 1 then
-            return next
-         end
+    end
+  end
+
+  -- make a copy as we need to modify default_mappings
+  for section_name, section_mappings in pairs(default_mappings) do
+    for mode, mode_mappings in pairs(section_mappings) do
+      mode_mappings = (type(mode_mappings) == "table" and mode_mappings) or {}
+      for k, _ in pairs(mode_mappings) do
+        -- if key if found then remove from default_mappings
+        if keys_to_disable[mode] and keys_to_disable[mode][k] then
+          default_mappings[section_name][mode][k] = nil
+        end
       end
-   end
+    end
+  end
 
-   -- ----------------
-   -- End helper functions
-   -- ----------------
+  return default_mappings
+end
 
-   local buf = vim.fn.bufnr()
-   if vim.fn.buflisted(buf) == 0 then -- exit if buffer number is invalid
-      vim.cmd "close"
+M.load_mappings = function(section, mapping_opt)
+  local function set_section_map(section_values)
+    if section_values.plugin then
       return
-   end
+    end
+    section_values.plugin = nil
 
-   if #vim.fn.getbufinfo { buflisted = 1 } < 2 then
-      if opts.quit then
-         -- exit when there is only one buffer left
-         if force then
-            vim.cmd "qall!"
-         else
-            vim.cmd "confirm qall"
-         end
-         return
+    for mode, mode_values in pairs(section_values) do
+      local default_opts = merge_tb("force", { mode = mode }, mapping_opt or {})
+      for keybind, mapping_info in pairs(mode_values) do
+        -- merge default + user opts
+        local opts = merge_tb("force", default_opts, mapping_info.opts or {})
+
+        mapping_info.opts, opts.mode = nil, nil
+        opts.desc = mapping_info[2]
+
+        vim.keymap.set(mode, keybind, mapping_info[1], opts)
       end
+    end
+  end
 
-      local chad_term, type = pcall(function()
-         return vim.api.nvim_buf_get_var(buf, "term_type")
-      end)
+  local mappings = require("core.utils").load_config().mappings
 
-      if chad_term then
-         -- Must be a window type
-         vim.cmd(string.format("setlocal nobl", buf))
-         vim.cmd "enew"
-         return
-      end
-      -- don't exit and create a new empty buffer
-      vim.cmd "enew"
-      vim.cmd "bp"
-   end
+  if type(section) == "string" then
+    mappings[section]["plugin"] = nil
+    mappings = { mappings[section] }
+  end
 
-   local next_buf = get_next_buf(buf)
-   local windows = vim.fn.getbufinfo(buf)[1].windows
-
-   -- force deletion of terminal buffers to avoid the prompt
-   if force or vim.fn.getbufvar(buf, "&buftype") == "terminal" then
-      local chad_term, type = pcall(function()
-         return vim.api.nvim_buf_get_var(buf, "term_type")
-      end)
-
-      -- TODO this scope is error prone, make resilient
-      if chad_term then
-         if type == "wind" then
-            -- hide from bufferline
-            vim.cmd(string.format("%d bufdo setlocal nobl", buf))
-            -- swtich to another buff
-            -- TODO switch to next bufffer, this works too
-            vim.cmd "BufferLineCycleNext"
-         else
-            local cur_win = vim.fn.winnr()
-            -- we can close this window
-            vim.cmd(string.format("%d wincmd c", cur_win))
-            return
-         end
-      else
-         switch_buffer(windows, next_buf)
-         vim.cmd(string.format("bd! %d", buf))
-      end
-   else
-      switch_buffer(windows, next_buf)
-      vim.cmd(string.format("silent! confirm bd %d", buf))
-   end
-   -- revert buffer switches if user has canceled deletion
-   if vim.fn.buflisted(buf) == 1 then
-      switch_buffer(windows, buf)
-   end
+  for _, sect in pairs(mappings) do
+    set_section_map(sect)
+  end
 end
 
--- hide statusline
--- tables fetched from load_config function
-M.hide_statusline = function()
-   local hidden = require("core.utils").load_config().plugins.options.statusline.hidden
-   local shown = require("core.utils").load_config().plugins.options.statusline.shown
-   local api = vim.api
-   local buftype = api.nvim_buf_get_option("%", "ft")
+-- merge default/user plugin tables
+M.merge_plugins = function(plugins)
+  local plugin_configs = M.load_config().plugins
+  local user_plugins = plugin_configs
 
-   -- shown table from config has the highest priority
-   if vim.tbl_contains(shown, buftype) then
-      api.nvim_set_option("laststatus", 2)
-      return
-   end
+  -- old plugin syntax for adding plugins
+  if plugin_configs.user and type(plugin_configs.user) == "table" then
+    user_plugins = plugin_configs.user
+  end
 
-   if vim.tbl_contains(hidden, buftype) then
-      api.nvim_set_option("laststatus", 0)
-      return
-   else
-      api.nvim_set_option("laststatus", 2)
-   end
+  -- support old plugin removal syntax
+  local remove_plugins = plugin_configs.remove
+  if type(remove_plugins) == "table" then
+    for _, v in ipairs(remove_plugins) do
+      plugins[v] = nil
+    end
+  end
+
+  plugins = merge_tb("force", plugins, user_plugins)
+
+  local final_table = {}
+
+  for key, val in pairs(plugins) do
+    if val and type(val) == "table" then
+      plugins[key] = val.rm_default_opts and user_plugins[key] or plugins[key]
+      plugins[key][1] = key
+      final_table[#final_table + 1] = plugins[key]
+    end
+  end
+
+  return final_table
 end
 
--- load config
--- 1st arg = boolean - whether to force reload
--- Modifies _G._NVCHAD_CONFIG global variable
-M.load_config = function(reload)
-   -- only do the stuff below one time, otherwise just return the set config
-   if _G._NVCHAD_CONFIG_CONTENTS ~= nil and not (reload or false) then
-      return _G._NVCHAD_CONFIG_CONTENTS
-   end
+-- override plugin options table with custom ones
+M.load_override = function(options_table, name)
+  local plugin_configs, plugin_options = M.load_config().plugins, nil
 
-   -- these are the table value which will be always prioritiezed to take user config value
-   local to_replace = {
-      "['mappings']['plugins']['esc_insertmode']",
-      "['mappings']['terminal']['esc_termmode']",
-      "['mappings']['terminal']['esc_hide_termmode']",
-   }
+  -- support old plugin syntax for override
+  local user_override = plugin_configs.override and plugin_configs.override[name]
+  if user_override and type(user_override) == "table" then
+    plugin_options = user_override
+  end
 
-   local default_config = "core.default_config"
-   local config_name = vim.g.nvchad_user_config or "chadrc"
-   local config_file = vim.fn.stdpath "config" .. "/lua/custom/" .. config_name .. ".lua"
+  -- if no old style plugin override is found, then use the new syntax
+  if not plugin_options and plugin_configs[name] then
+    local override_options = plugin_configs[name].override_options or {}
+    if type(override_options) == "table" then
+      plugin_options = override_options
+    elseif type(override_options) == "function" then
+      plugin_options = override_options()
+    end
+  end
 
-   -- unload the modules if force reload
-   if reload then
-      package.loaded[default_config or false] = nil
-      package.loaded[config_name or false] = nil
-   end
+  -- make sure the plugin options are a table
+  plugin_options = type(plugin_options) == "table" and plugin_options or {}
 
-   -- don't enclose in pcall, it better break when default config is faulty
-   _G._NVCHAD_CONFIG_CONTENTS = require(default_config)
-
-   -- user config is not required to run nvchad but a optional
-   -- Make sure the config doesn't break the whole system if user config is not present or in bad state or not a table
-   -- print warning texts if user config file is  present
-   -- check if the user config is present
-   if vim.fn.filereadable(vim.fn.glob(config_file)) == 1 then
-      local present, config = pcall(require, "custom/" .. config_name)
-      if present then
-         -- make sure the returned value is table
-         if type(config) == "table" then
-            -- data = require(config_name)
-            _G._NVCHAD_CONFIG_CONTENTS = require("core.utils").merge_table(
-               _G._NVCHAD_CONFIG_CONTENTS,
-               config,
-               to_replace
-            )
-         else
-            print("Warning: " .. config_name .. " sourced successfully but did not return a lua table.")
-         end
-      else
-         print("Warning: " .. config_file .. " is present but sourcing failed.")
-      end
-   end
-   return _G._NVCHAD_CONFIG_CONTENTS
+  return merge_tb("force", options_table, plugin_options)
 end
 
-M.map = function(mode, keys, cmd, opt)
-   local options = { noremap = true, silent = true }
-   if opt then
-      options = vim.tbl_extend("force", options, opt)
-   end
+M.packer_sync = function(...)
+  local git_exists, git = pcall(require, "nvchad.utils.git")
+  local defaults_exists, defaults = pcall(require, "nvchad.utils.config")
+  local packer_exists, packer = pcall(require, "packer")
 
-   -- all valid modes allowed for mappings
-   -- :h map-modes
-   local valid_modes = {
-      [""] = true,
-      ["n"] = true,
-      ["v"] = true,
-      ["s"] = true,
-      ["x"] = true,
-      ["o"] = true,
-      ["!"] = true,
-      ["i"] = true,
-      ["l"] = true,
-      ["c"] = true,
-      ["t"] = true,
-   }
+  if git_exists and defaults_exists then
+    local current_branch_name = git.get_current_branch_name()
 
-   -- helper function for M.map
-   -- can gives multiple modes and keys
-   local function map_wrapper(mode, lhs, rhs, options)
-      if type(lhs) == "table" then
-         for _, key in ipairs(lhs) do
-            map_wrapper(mode, key, rhs, options)
-         end
-      else
-         if type(mode) == "table" then
-            for _, m in ipairs(mode) do
-               map_wrapper(m, lhs, rhs, options)
-            end
-         else
-            if valid_modes[mode] and lhs and rhs then
-               vim.api.nvim_set_keymap(mode, lhs, rhs, options)
-            else
-               mode, lhs, rhs = mode or "", lhs or "", rhs or ""
-               print("Cannot set mapping [ mode = '" .. mode .. "' | key = '" .. lhs .. "' | cmd = '" .. rhs .. "' ]")
-            end
-         end
+    -- warn the user if we are on a snapshot branch
+    if current_branch_name:match(defaults.snaps.base_snap_branch_name .. "(.+)" .. "$") then
+      vim.api.nvim_echo({
+        { "WARNING: You are trying to use ", "WarningMsg" },
+        { "PackerSync" },
+        {
+          " on a NvChadSnapshot. This will cause issues if NvChad dependencies contain "
+            .. "any breaking changes! Plugin updates will not be included in this "
+            .. "snapshot, so they will be lost after switching between snapshots! Would "
+            .. "you still like to continue? [y/N]\n",
+          "WarningMsg",
+        },
+      }, false, {})
+
+      local ans = vim.trim(string.lower(vim.fn.input "-> "))
+
+      if ans ~= "y" then
+        return
       end
-   end
+    end
+  end
 
-   map_wrapper(mode, keys, cmd, options)
-end
+  if packer_exists then
+    packer.sync(...)
 
--- Base code: https://gist.github.com/revolucas/184aec7998a6be5d2f61b984fac1d7f7
--- Changes over it: preserving table 1 contents and also update with table b, without duplicating
--- 1st arg - base table
--- 2nd arg - table to merge
--- 3rg arg - list of nodes as a table, if the node is found replace the from table2 to result, rather than adding the value
--- e.g: merge_table(t1, t2, { ['mappings']['plugins']['bufferline'] })
-M.merge_table = function(into, from, nodes_to_replace)
-   -- make sure both are table
-   if type(into) ~= "table" or type(from) ~= "table" then
-      return into
-   end
-
-   local stack, seen = {}, {}
-   local table1, table2 = into, from
-
-   if type(nodes_to_replace) == "table" then
-      -- function that will be executed with loadstring
-      local replace_fn = function(node)
-         local base_fn = [[
-return function(table1, table2)
-   local t1, t2 = table1_node or false , table2_node or false
-   if t1 and t2 then
-      table1_node = table2_node
-   end
-   return table1
-end]]
-
-         -- replace the _node in base_fn to actual given node value
-         local fn = base_fn:gsub("_node", node)
-         -- return the function created from the string base_fn
-         return loadstring(fn)()(table1, table2)
-      end
-
-      for _, node in ipairs(nodes_to_replace) do
-         -- pcall() is a poor workaround for if "['mappings']['plugins']['esc_insertmode']" 'plugins' sub-table does not exist
-         local ok, result = pcall(replace_fn, node)
-         if ok then
-            -- if the node is found then replace
-            table1 = result
-         end
-      end
-   end
-
-   while true do
-      for k, v in pairs(table2) do
-         if type(v) == "table" and type(table1[k]) == "table" then
-            table.insert(stack, { table1[k], table2[k] })
-         else
-            local present = seen[v] or false
-            if not present then
-               if type(k) == "number" then
-                  -- add the value to seen table until value is found
-                  -- only do when key is number we just want to append to subtables
-                  -- todo: maybe improve this
-
-                  for _, value in pairs(table1) do
-                     if value == v then
-                        present = true
-                        break
-                     end
-                  end
-                  seen[v] = true
-                  if not present then
-                     table1[#table1 + 1] = v
-                  end
-               else
-                  table1[k] = v
-               end
-            end
-         end
-      end
-      if #stack > 0 then
-         local t = stack[#stack]
-         table1, table2 = t[1], t[2]
-         stack[#stack] = nil
-      else
-         break
-      end
-   end
-   return into
-end
-
--- load plugin after entering vim ui
-M.packer_lazy_load = function(plugin, timer)
-   if plugin then
-      timer = timer or 0
-      vim.defer_fn(function()
-         require("packer").loader(plugin)
-      end, timer)
-   end
+    local plugins = M.load_config().plugins
+    local old_style_options = plugins.user or plugins.override or plugins.remove
+    if old_style_options then
+      vim.notify_once("NvChad: This plugin syntax is deprecated, use new style config.", "Error")
+    end
+  else
+    error "Packer could not be loaded!"
+  end
 end
 
 return M

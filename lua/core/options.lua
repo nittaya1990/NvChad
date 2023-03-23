@@ -1,33 +1,34 @@
 local opt = vim.opt
 local g = vim.g
+local config = require("core.utils").load_config()
 
--- export user config as a global varibale
-g.nvchad_user_config = "chadrc"
+g.nvchad_theme = config.ui.theme
+g.toggle_theme_icon = "   "
+g.transparency = config.ui.transparency
+g.theme_switcher_loaded = false
 
-local options = require("core.utils").load_config().options
+opt.laststatus = 3 -- global statusline
+opt.showmode = false
 
-opt.title = true
-opt.clipboard = options.clipboard
-opt.cmdheight = options.cmdheight
-opt.cul = true -- cursor line
+opt.clipboard = "unnamedplus"
+opt.cursorline = true
 
--- Indentline
-opt.expandtab = options.expandtab
-opt.shiftwidth = options.shiftwidth
-opt.smartindent = options.smartindent
+-- Indenting
+opt.expandtab = true
+opt.shiftwidth = 2
+opt.smartindent = true
+opt.tabstop = 2
+opt.softtabstop = 2
 
--- disable tilde on end of buffer: https://github.com/neovim/neovim/pull/8546#issuecomment-643643758
 opt.fillchars = { eob = " " }
-
-opt.hidden = options.hidden
-opt.ignorecase = options.ignorecase
-opt.mouse = options.mouse
+opt.ignorecase = true
+opt.smartcase = true
+opt.mouse = "a"
 
 -- Numbers
-opt.number = options.number
-opt.numberwidth = options.numberwidth
-opt.relativenumber = options.relativenumber
-opt.ruler = options.ruler
+opt.number = true
+opt.numberwidth = 2
+opt.ruler = false
 
 -- disable nvim intro
 opt.shortmess:append "sI"
@@ -35,42 +36,60 @@ opt.shortmess:append "sI"
 opt.signcolumn = "yes"
 opt.splitbelow = true
 opt.splitright = true
-opt.tabstop = options.tabstop
 opt.termguicolors = true
-opt.timeoutlen = options.timeoutlen
-opt.undofile = options.undofile
+opt.timeoutlen = 400
+opt.undofile = true
 
 -- interval for writing swap file to disk, also used by gitsigns
-opt.updatetime = options.updatetime
+opt.updatetime = 250
 
 -- go to previous/next line with h,l,left arrow and right arrow
 -- when cursor reaches end/beginning of line
-opt.whichwrap:append "<>hl"
+opt.whichwrap:append "<>[]hl"
 
-g.mapleader = options.mapleader
+g.mapleader = " "
 
 -- disable some builtin vim plugins
-local disabled_built_ins = {
-   "2html_plugin",
-   "getscript",
-   "getscriptPlugin",
-   "gzip",
-   "logipat",
-   "netrw",
-   "netrwPlugin",
-   "netrwSettings",
-   "netrwFileHandlers",
-   "matchit",
-   "tar",
-   "tarPlugin",
-   "rrhelper",
-   "spellfile_plugin",
-   "vimball",
-   "vimballPlugin",
-   "zip",
-   "zipPlugin",
+local default_plugins = {
+  "2html_plugin",
+  "getscript",
+  "getscriptPlugin",
+  "gzip",
+  "logipat",
+  "netrw",
+  "netrwPlugin",
+  "netrwSettings",
+  "netrwFileHandlers",
+  "matchit",
+  "tar",
+  "tarPlugin",
+  "rrhelper",
+  "spellfile_plugin",
+  "vimball",
+  "vimballPlugin",
+  "zip",
+  "zipPlugin",
+  "tutor",
+  "rplugin",
+  "syntax",
+  "synmenu",
+  "optwin",
+  "compiler",
+  "bugreport",
+  "ftplugin",
 }
 
-for _, plugin in pairs(disabled_built_ins) do
-   g["loaded_" .. plugin] = 1
+for _, plugin in pairs(default_plugins) do
+  g["loaded_" .. plugin] = 1
+end
+
+local default_providers = {
+  "node",
+  "perl",
+  "python3",
+  "ruby",
+}
+
+for _, provider in ipairs(default_providers) do
+  vim.g["loaded_" .. provider .. "_provider"] = 0
 end
